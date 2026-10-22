@@ -57,7 +57,9 @@ async function upload() {
     const form = new FormData()
     form.append('file', selectedFile.value)
     const data = await parseResponse(await fetch('/api/upload', { method: 'POST', body: form }))
-    notice.value = `${data.document.filename} indexed: ${data.document.chunks} searchable chunks.`
+    notice.value = data.document.duplicate
+      ? `${data.document.filename} is already indexed — no new embeddings created.`
+      : `${data.document.filename} indexed: ${data.document.chunks} searchable chunks.`
     selectedFile.value = null
     const input = document.querySelector<HTMLInputElement>('#file-input')
     if (input) input.value = ''
