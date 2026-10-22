@@ -1,3 +1,4 @@
+# services.py
 """Document parsing, indexing, retrieval, and source-grounded LLM generation."""
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
+
+from .review_quality import GAP_REVIEW_INSTRUCTIONS, review_quality_issues
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -233,14 +236,7 @@ def answer_question(question: str, *, review: bool = False) -> dict:
         })
         sections.append(f"[{i}] {meta.get('source', 'Unknown')} ({meta.get('locator', '')}):\n{doc.page_content}")
     instruction = (
-        "Produce a concise, structured preliminary gap review: (1) Documented controls, "
-        "(2) Potential gaps or unanswered questions, (3) Follow-up actions. "
-        "Do NOT conclude a legal violation. For each gap, name missing/contradictory "
-        "evidence and cite supporting excerpts. If sources do not permit comparison, "
-        "explain exactly what additional records would be needed. "
-        "Distinguish documented discrepancies from unverified details; do not interpret "
-        "'label could not be located' as proof the label was absent, or assume the "
-        "event triggered immediate reporting without evidence of reportability."
+        GAP_REVIEW_INSTRUCTIONS
         if review else "Answer the user's question clearly, citing evidence markers."
     )
     messages = [
@@ -251,4 +247,27 @@ def answer_question(question: str, *, review: bool = False) -> dict:
     result = model.invoke(messages)
     # Some models may return structured content blocks; stringify safely for display.
     content = result.content if isinstance(result.content, str) else str(result.content)
+
+    if review:
+        issues = review_quality_issues(content, sources)
+        if issues:
+            # One targeted revision only: prevents an unbounded, costly retry loop.
+            # Reuse the original evidence and require a full corrected review.
+            correction = HumanMessage(content=(
+                "Revise your ENTIRE preceding preliminary gap review. "
+                "The following assertions are not supported by the incident evidence:\n- "
+                + "\n- ".join(issues)
+                + "\nRetain the same three numbered sections, use only the supplied "
+                  "EVIDENCE and valid citation markers, and correct the unsupported "
+                  "assertions. Preserve accurate findings and follow-up actions. "
+                  "Return only the revised review."
+            ))
+            revised = model.invoke([*messages, correction])
+            content = revised.content if isinstance(revised.content, str) else str(revised.content)
+            outstanding = review_quality_issues(content, sources)
+            if outstanding:
+                # Never silently certify an unsuccessful correction as accurate.
+                content += ("\n\nAUTOMATED RELIABILITY WARNING — verify before use:\n- "
+                            + "\n- ".join(outstanding))
+
     return {"answer": content, "sources": sources}
