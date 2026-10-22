@@ -1,0 +1,18 @@
+#Secret
+.env
+
+#Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+#Frontend
+frontend/node_modules/
+frontend/dist/
+
+#Backend
+backend/data/
+
+# macOS
+.DS_Store

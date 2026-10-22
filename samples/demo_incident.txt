@@ -1,0 +1,8 @@
+DEMONSTRATION INCIDENT RECORD — SYNTHETIC, NOT REAL
+Fictional Incident Summary - October 9, 2026
+
+A worker transferred cleaning solution to a small secondary container. The label on the smaller container could not be located during the review. The worker used gloves but reported not wearing safety goggles. No injury was reported. A supervisor was informed the next morning. The report does not mention whether the employee's refresher training was current.
+
+Corrective action proposed: replace secondary-container labels and hold an additional chemical handling briefing. The incident note has no named action owner or due date and does not indicate whether the actions were completed.
+
+This example is deliberately incomplete so that a gap-review agent can identify follow-up questions without asserting that a law was broken.

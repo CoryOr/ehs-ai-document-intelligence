@@ -1,0 +1,12 @@
+DEMONSTRATION DOCUMENT — NOT AN OFFICIAL STANDARD
+Illustrative Workplace Safety Policy (fictional company)
+
+1. Personal protective equipment: Employees handling cleaning chemicals must wear chemical-resistant gloves and safety goggles. Supervisors shall document that employees received training on correct PPE selection.
+
+2. Chemical storage: All secondary containers must be labeled with their contents. Safety data sheets should be readily available to affected staff. Weekly chemical storage inspections are performed and retained in an inspection log.
+
+3. Incident reporting: Workers shall notify their supervisor immediately after an injury, chemical spill, or near miss. The supervisor should document an incident summary within 24 hours and assign any corrective actions.
+
+4. Training: New employees receive orientation before independent work. Refresher training on chemical handling occurs every 12 months and should be recorded in a training register.
+
+5. Corrective actions: Each action has an owner, a target completion date, and verification of completion. Overdue items should be escalated to the safety coordinator.
