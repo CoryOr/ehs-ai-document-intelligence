@@ -1,7 +1,7 @@
-# reports.py
-"""Export analysis results in formats mentioned in the ERM posting."""
+"""Export sourced EHS reviews as PDF, Word, and structured Excel workbooks."""
 from __future__ import annotations
 
+import re
 from html import escape
 from io import BytesIO
 
@@ -16,8 +16,66 @@ DISCLAIMER = "AI-generated draft for demonstration only. Requires professional E
 
 
 def excel_text(text: str) -> str:
-    """Write untrusted text as text, never as a spreadsheet formula."""
-    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+    """Keep untrusted file excerpts and LLM text from becoming Excel formulas."""
+    value = str(text)
+    return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
+
+
+def parse_report_sections(answer: str) -> dict[str, list[str]]:
+    """Split the existing numbered LLM review into rows without inventing facts.
+
+    This only understands the format requested by answer_question(review=True).
+    Unstructured answers remain available in the Analysis sheet.
+    """
+    sections: dict[str, list[str]] = {
+        "Overview": [],
+        "Documented controls": [],
+        "Potential gaps": [],
+        "Follow-up actions": [],
+        "Summary": [],
+    }
+    section = "Overview"
+    headers = {
+        "documented controls": "Documented controls",
+        "potential gaps or unanswered questions": "Potential gaps",
+        "follow-up actions": "Follow-up actions",
+    }
+    for raw in answer.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        header = re.match(r"^\(?[123]\)?[.)\s-]*(.+?)\s*$", line, re.I)
+        if header and header.group(1).strip().lower() in headers:
+            section = headers[header.group(1).strip().lower()]
+            continue
+        if line.lower().startswith("summary:"):
+            section = "Summary"
+            line = line.split(":", 1)[1].strip()
+        if line.startswith(("- ", "• ", "* ")):
+            sections[section].append(line[2:].strip())
+        elif section not in ("Overview", "Summary") and sections[section]:
+            # A wrapped continuation line belongs to the preceding item.
+            sections[section][-1] += " " + line
+        else:
+            sections[section].append(line)
+    return sections
+
+
+def _header(ws, row: int = 1) -> None:
+    for cell in ws[row]:
+        cell.font = Font(name="Aptos", bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="153D57")
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    ws.row_dimensions[row].height = 30
+    ws.freeze_panes = f"A{row + 1}"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _wrap_rows(ws, from_row: int = 2) -> None:
+    for row in ws.iter_rows(min_row=from_row):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+        ws.row_dimensions[row[0].row].height = 64
 
 
 def build_report(title: str, answer: str, sources: list[dict], format: str) -> tuple[bytes, str, str]:
@@ -56,29 +114,59 @@ def build_report(title: str, answer: str, sources: list[dict], format: str) -> t
         return buffer.getvalue(), "application/pdf", "pdf"
 
     if format == "xlsx":
+        parts = parse_report_sections(answer)
         book = Workbook()
         overview = book.active
         overview.title = "Analysis"
-        overview.append(["Title", excel_text(title)])
+        overview.append(["EHS Intelligence Report", excel_text(title)])
         overview.append(["Notice", DISCLAIMER])
-        overview.append(["Analysis", excel_text(answer)])
-        overview.column_dimensions["A"].width = 20
-        overview.column_dimensions["B"].width = 95
-        overview["B3"].alignment = Alignment(wrap_text=True, vertical="top")
-        overview.row_dimensions[3].height = min(380, max(80, len(answer) // 6))
+        overview.append([])
+        overview.append(["Section", "Review text"])
+        for section, lines in parts.items():
+            for line in lines:
+                overview.append([section, excel_text(line)])
+        for cell in overview[4]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="153D57")
+        overview["A1"].font = Font(bold=True, size=13, color="153D57")
+        overview["B1"].font = Font(bold=True, size=13, color="153D57")
+        overview.column_dimensions["A"].width = 26
+        overview.column_dimensions["B"].width = 105
+        overview.freeze_panes = "B5"
+        overview.auto_filter.ref = f"A4:B{max(4, overview.max_row)}"
+        _wrap_rows(overview, 5)
+        overview["B2"].alignment = Alignment(wrap_text=True)
+
+        findings = book.create_sheet("Findings")
+        findings.append(["Potential gap / unanswered question", "Citations", "Review status", "Reviewer notes"])
+        for gap in parts["Potential gaps"]:
+            refs = ", ".join(dict.fromkeys(re.findall(r"\[\d+\]", gap)))
+            findings.append([excel_text(gap), refs, "Needs human review", ""])
+        _header(findings)
+        for col, width in {"A": 94, "B": 20, "C": 24, "D": 45}.items():
+            findings.column_dimensions[col].width = width
+        _wrap_rows(findings)
+
+        actions = book.create_sheet("Follow-up Actions")
+        actions.append(["Suggested follow-up", "Citations", "Owner", "Progress"])
+        for action in parts["Follow-up actions"]:
+            refs = ", ".join(dict.fromkeys(re.findall(r"\[\d+\]", action)))
+            actions.append([excel_text(action), refs, "", "Not started"])
+        _header(actions)
+        for col, width in {"A": 94, "B": 20, "C": 26, "D": 23}.items():
+            actions.column_dimensions[col].width = width
+        _wrap_rows(actions)
+
         evidence = book.create_sheet("Evidence")
         evidence.append(["Citation", "Document", "Location", "Retrieved excerpt"])
         for s in sources:
-            evidence.append([excel_text(s["marker"]), excel_text(s["filename"]), excel_text(s["locator"]), excel_text(s["excerpt"])])
-        for cell in evidence[1]:
-            cell.font = Font(color="FFFFFF", bold=True)
-            cell.fill = PatternFill("solid", fgColor="153D57")
+            evidence.append([excel_text(s["marker"]), excel_text(s["filename"]),
+                             excel_text(s["locator"]), excel_text(s["excerpt"])])
+        _header(evidence)
         for col, width in {"A": 15, "B": 32, "C": 25, "D": 95}.items():
             evidence.column_dimensions[col].width = width
-        for row in evidence.iter_rows(min_row=2):
-            for cell in row:
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-        evidence.freeze_panes = "A2"
+        _wrap_rows(evidence)
+
         buffer = BytesIO()
         book.save(buffer)
         return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
