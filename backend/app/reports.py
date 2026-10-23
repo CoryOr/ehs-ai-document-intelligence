@@ -1,3 +1,4 @@
+# reports.py
 """Export sourced EHS reviews as PDF, Word, and structured Excel workbooks."""
 from __future__ import annotations
 
@@ -75,6 +76,28 @@ def source_role(source: dict) -> str:
     return "other"
 
 
+# Bracketed numeric citation groups, e.g. [1], [1, 3], or [2,3, 5].
+# Ignore arbitrary bracketed prose such as [policy] rather than guessing.
+_CITATION_GROUP = re.compile(r"\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]")
+
+
+def extract_citation_markers(text: str) -> list[str]:
+    """Normalize grouped and individual references in first-seen order.
+
+    "[1, 3] and [3][2]" becomes ["[1]", "[3]", "[2]"].
+    A marker's presence does not prove its excerpt supports a claim.
+    """
+    markers: list[str] = []
+    seen: set[str] = set()
+    for group in _CITATION_GROUP.finditer(text):
+        for item in group.group(1).split(","):
+            marker = f"[{int(item.strip())}]"
+            if marker not in seen:
+                seen.add(marker)
+                markers.append(marker)
+    return markers
+
+
 def citation_audit(text: str, sources: list[dict], *, comparison: bool) -> dict:
     """Check citation marker existence and document-type coverage, NOT claim truth.
 
@@ -82,7 +105,7 @@ def citation_audit(text: str, sources: list[dict], *, comparison: bool) -> dict:
     structural evidence only; a human must still verify actual semantic support.
     """
     by_marker = {str(s.get("marker", "")): s for s in sources}
-    claimed = list(dict.fromkeys(re.findall(r"\[\d+\]", text)))
+    claimed = extract_citation_markers(text)
     valid = [mark for mark in claimed if mark in by_marker]
     invalid = [mark for mark in claimed if mark not in by_marker]
     policy = [mark for mark in valid if source_role(by_marker[mark]) == "policy"]

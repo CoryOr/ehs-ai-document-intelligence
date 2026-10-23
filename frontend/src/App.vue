@@ -13,17 +13,35 @@ type Source = {
   locator: string
   excerpt: string
 }
-type Answer = { answer: string; sources: Source[] }
+type Answer = {
+  answer: string
+  sources: Source[]
+  tool_used?: 'answer_document_question' | 'review_policy_gaps' | 'prepare_report'
+  report_ready?: boolean
+  title?: string
+}
+
 
 const documents = ref<StoredDocument[]>([])
 const selectedFile = ref<File | null>(null)
 const question = ref('What safety controls are documented, and which follow-up actions appear incomplete?')
 const result = ref<Answer | null>(null)
-const mode = ref<'question' | 'review'>('question')
-const loading = ref<'upload' | 'question' | 'review' | 'export' | null>(null)
+const mode = ref<'question' | 'review' | 'agent'>('question')
+const loading = ref<'upload' | 'question' | 'review' | 'agent' | 'export' | null>(null)
 const notice = ref('')
 const error = ref('')
 const uploadedCount = computed(() => documents.value.length)
+const containsReliabilityWarning = computed(() =>
+  result.value?.answer.includes('AUTOMATED RELIABILITY WARNING') ?? false,
+)
+
+function toolLabel(tool?: Answer['tool_used']): string {
+  if (tool === 'answer_document_question') return 'Document Q&A'
+  if (tool === 'review_policy_gaps') return 'Policy gap review'
+  if (tool === 'prepare_report') return 'Report preparation'
+  return 'Unknown tool'
+}
+
 
 async function parseResponse(response: Response) {
   const json = await response.json().catch(() => ({}))
@@ -93,6 +111,26 @@ async function ask(review = false) {
   }
 }
 
+async function askAgent() {
+  if (loading.value || question.value.trim().length < 3) return
+  loading.value = 'agent'
+  error.value = ''
+  notice.value = ''
+  result.value = null
+  mode.value = 'agent'
+  try {
+    result.value = await parseResponse(await fetch('/api/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request: question.value.trim() }),
+    })) as Answer
+  } catch (err) {
+    error.value = (err as Error).message
+  } finally {
+    loading.value = null
+  }
+}
+
 async function exportFile(format: 'pdf' | 'docx' | 'xlsx') {
   if (!result.value || loading.value) return
   loading.value = 'export'
@@ -102,7 +140,9 @@ async function exportFile(format: 'pdf' | 'docx' | 'xlsx') {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: mode.value === 'review' ? 'Preliminary EHS Gap Review' : 'EHS Document Q&A',
+        title: mode.value === 'agent'
+          ? (result.value.title || 'EHS Document Intelligence Report')
+          : (mode.value === 'review' ? 'Preliminary EHS Gap Review' : 'EHS Document Q&A'),
         answer: result.value.answer,
         sources: result.value.sources,
         format,
@@ -191,7 +231,7 @@ onMounted(refreshDocuments)
 
           <div class="prompt-section">
             <label for="question">What would you like to investigate?</label>
-            <textarea id="question" v-model="question" rows="4" placeholder="Ask a question about the uploaded documents…"></textarea>
+            <textarea id="question" v-model="question" rows="4" maxlength="1500" placeholder="Ask a question about the uploaded documents…"></textarea>
             <div class="example-row"><span>Try:</span>
               <button class="example-chip" @click="question = 'What PPE is required when handling cleaning chemicals?'">PPE requirements</button>
               <button class="example-chip" @click="question = 'Compare the incident note with the written policy. What information is missing?'">Incident gaps</button>
@@ -203,14 +243,25 @@ onMounted(refreshDocuments)
               <button class="secondary-button" :disabled="loading !== null || question.trim().length < 3" @click="ask(true)">
                 {{ loading === 'review' ? 'Reviewing…' : 'Run preliminary gap review' }} <span>↗</span>
               </button>
+              <button class="primary-button agent-button" :disabled="loading !== null || question.trim().length < 3" @click="askAgent">
+                <span>✧</span> {{ loading === 'agent' ? 'Agent working…' : 'Ask AI Agent' }}
+              </button>
             </div>
+            <p class="agent-help muted small">AI Agent automatically selects document Q&A, policy-gap review, or report preparation.</p>
           </div>
 
           <div v-if="error" class="alert error" role="alert">{{ error }}. Confirm that the backend is running and your OpenAI API key is configured.</div>
           <div v-if="notice" class="alert success" role="status">{{ notice }}</div>
 
           <div v-if="result" class="result-card">
-            <div class="result-heading"><div><span class="result-label">{{ mode === 'review' ? 'PRELIMINARY REVIEW' : 'GROUNDED RESPONSE' }}</span><h3>{{ mode === 'review' ? 'Findings & follow-up' : 'AI response' }}</h3></div><span class="result-dot">✓</span></div>
+            <div class="result-heading"><div><span class="result-label">{{ mode === 'agent' ? 'AI AGENT RESPONSE' : mode === 'review' ? 'PRELIMINARY REVIEW' : 'GROUNDED RESPONSE' }}</span><h3>{{ mode === 'review' ? 'Findings & follow-up' : 'AI response' }}</h3></div><span class="result-dot">✓</span></div>
+            <div v-if="mode === 'agent'" class="agent-trace" role="status">
+              <div><strong>Selected tool</strong><span class="tool-badge">{{ toolLabel(result.tool_used) }}</span></div>
+              <small>{{ result.report_ready ? 'Report ready for export' : 'Evidence-grounded response' }}</small>
+            </div>
+            <div v-if="containsReliabilityWarning" class="alert reliability-alert" role="alert">
+              <strong>Reliability warning:</strong> Check the AI response and supporting evidence before using this result.
+            </div>
             <div class="answer-text">{{ result.answer }}</div>
             <div class="sources-section">
               <h4>Retrieved supporting excerpts <span>{{ result.sources.length }}</span></h4>
@@ -219,7 +270,7 @@ onMounted(refreshDocuments)
                 <p>{{ source.excerpt }}</p>
               </details>
             </div>
-            <div class="export-bar"><div><strong>Export your analysis</strong><span>Prepare a draft for review</span></div>
+            <div v-if="mode !== 'agent' || result.report_ready" class="export-bar"><div><strong>Export your analysis</strong><span>Prepare a draft for review</span></div>
               <div class="export-buttons">
                 <button :disabled="loading !== null" @click="exportFile('pdf')">↓ PDF</button>
                 <button :disabled="loading !== null" @click="exportFile('docx')">↓ Word</button>
@@ -227,7 +278,7 @@ onMounted(refreshDocuments)
               </div>
             </div>
           </div>
-          <div v-else-if="loading === 'question' || loading === 'review'" class="empty-results"><span class="spinner"></span><p>Retrieving evidence and preparing your answer…</p></div>
+          <div v-else-if="loading === 'question' || loading === 'review' || loading === 'agent'" class="empty-results"><span class="spinner"></span><p>Retrieving evidence and preparing your answer…</p></div>
           <div v-else class="empty-results"><div class="empty-icon">✧</div><strong>Evidence-led analysis starts here</strong><p>Upload the example policy and incident report, then ask a question to see document-aware answers with numbered references.</p></div>
         </section>
       </div>
@@ -235,3 +286,16 @@ onMounted(refreshDocuments)
     </main>
   </div>
 </template>
+
+<style scoped>
+.agent-button { background: #184d64; border-color: #184d64; }
+.agent-button:hover:not(:disabled) { background: #123e51; }
+.agent-help { margin: 10px 0 0; line-height: 1.6; }
+.agent-trace { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid #dcebe1; background: #f7fbfa; padding: 13px 20px; }
+.agent-trace > div { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.agent-trace strong { color: #355e55; font-size: 11px; }
+.agent-trace small { color: #58796e; font-size: 11px; }
+.tool-badge { display: inline-block; border: 1px solid #a8cabc; border-radius: 999px; background: #e7f4eb; color: #176247; padding: 5px 11px; font-size: 11px; font-weight: 700; }
+.reliability-alert { margin: 15px 20px 0; color: #8d4e1d; background: #fff5e9; border: 1px solid #ecd0a4; }
+@media (max-width: 650px) { .agent-trace { align-items: flex-start; flex-direction: column; } }
+</style>
