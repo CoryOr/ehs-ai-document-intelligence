@@ -61,6 +61,55 @@ def parse_report_sections(answer: str) -> dict[str, list[str]]:
     return sections
 
 
+def source_role(source: dict) -> str:
+    """Best-effort source classification using document names, NOT a verified fact.
+
+    Users may upload arbitrary filenames. Unrecognized names remain ``other``
+    rather than being incorrectly called a policy or an incident.
+    """
+    name = str(source.get("filename", "")).casefold().replace("-", "_")
+    if "policy" in name or "procedure" in name:
+        return "policy"
+    if "incident" in name or "near_miss" in name:
+        return "incident"
+    return "other"
+
+
+def citation_audit(text: str, sources: list[dict], *, comparison: bool) -> dict:
+    """Check citation marker existence and document-type coverage, NOT claim truth.
+
+    Never attach a source marker the model did not provide. Marker presence is
+    structural evidence only; a human must still verify actual semantic support.
+    """
+    by_marker = {str(s.get("marker", "")): s for s in sources}
+    claimed = list(dict.fromkeys(re.findall(r"\[\d+\]", text)))
+    valid = [mark for mark in claimed if mark in by_marker]
+    invalid = [mark for mark in claimed if mark not in by_marker]
+    policy = [mark for mark in valid if source_role(by_marker[mark]) == "policy"]
+    incident = [mark for mark in valid if source_role(by_marker[mark]) == "incident"]
+    other = [mark for mark in valid if source_role(by_marker[mark]) == "other"]
+
+    problems = []
+    if invalid:
+        problems.append("Unrecognized markers: " + ", ".join(invalid))
+    if not valid:
+        problems.append("No valid supporting citations")
+    if comparison:
+        available_roles = {source_role(s) for s in sources}
+        for role in ("policy", "incident"):
+            if role not in available_roles:
+                problems.append(f"No {role} source retrieved")
+            elif not (policy if role == "policy" else incident):
+                problems.append(f"Missing {role} citation")
+    return {
+        "all": ", ".join(valid),
+        "policy": ", ".join(policy),
+        "incident": ", ".join(incident),
+        "other": ", ".join(other),
+        "status": "; ".join(problems) if problems else "Markers valid — verify excerpt support",
+    }
+
+
 def _header(ws, row: int = 1) -> None:
     for cell in ws[row]:
         cell.font = Font(name="Aptos", bold=True, color="FFFFFF")
@@ -138,22 +187,29 @@ def build_report(title: str, answer: str, sources: list[dict], format: str) -> t
         overview["B2"].alignment = Alignment(wrap_text=True)
 
         findings = book.create_sheet("Findings")
-        findings.append(["Potential gap / unanswered question", "Citations", "Review status", "Reviewer notes"])
+        findings.append([
+            "Potential gap / unanswered question", "Citations", "Policy evidence",
+            "Incident evidence", "Other evidence", "Citation check", "Review status", "Reviewer notes",
+        ])
         for gap in parts["Potential gaps"]:
-            refs = ", ".join(dict.fromkeys(re.findall(r"\[\d+\]", gap)))
-            findings.append([excel_text(gap), refs, "Needs human review", ""])
+            audit = citation_audit(gap, sources, comparison=True)
+            findings.append([
+                excel_text(gap), audit["all"], audit["policy"], audit["incident"],
+                audit["other"], audit["status"], "Needs human review", "",
+            ])
         _header(findings)
-        for col, width in {"A": 94, "B": 20, "C": 24, "D": 45}.items():
+        for col, width in {"A": 88, "B": 18, "C": 18, "D": 18, "E": 18,
+                           "F": 52, "G": 25, "H": 42}.items():
             findings.column_dimensions[col].width = width
         _wrap_rows(findings)
 
         actions = book.create_sheet("Follow-up Actions")
-        actions.append(["Suggested follow-up", "Citations", "Owner", "Progress"])
+        actions.append(["Suggested follow-up", "Citations", "Evidence check", "Owner", "Progress"])
         for action in parts["Follow-up actions"]:
-            refs = ", ".join(dict.fromkeys(re.findall(r"\[\d+\]", action)))
-            actions.append([excel_text(action), refs, "", "Not started"])
+            audit = citation_audit(action, sources, comparison=False)
+            actions.append([excel_text(action), audit["all"], audit["status"], "", "Not started"])
         _header(actions)
-        for col, width in {"A": 94, "B": 20, "C": 26, "D": 23}.items():
+        for col, width in {"A": 88, "B": 20, "C": 52, "D": 26, "E": 23}.items():
             actions.column_dimensions[col].width = width
         _wrap_rows(actions)
 

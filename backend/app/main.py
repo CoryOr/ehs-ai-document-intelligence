@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field
 from .reports import build_report
 from .services import MAX_BYTES, answer_question, index_document, list_documents
 
+from .agent import run_agent
+
 load_dotenv()  # Load repo-root .env when launched from repo root or backend dir.
 app = FastAPI(title="EHS Document Intelligence", version="0.1.0")
 
@@ -37,6 +39,25 @@ class ExportRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=30000)
     sources: list[Source] = Field(default_factory=list, max_length=12)
     format: Literal["pdf", "docx", "xlsx"]
+
+class AgentRequest(BaseModel):
+    request: str = Field(min_length=3, max_length=1500)
+
+
+@app.post("/api/agent")
+def agent_request(payload: AgentRequest) -> dict:
+    try:
+        return run_agent(payload.request)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Agent failed: {type(exc).__name__}"
+        ) from exc
 
 
 @app.get("/api/health")
